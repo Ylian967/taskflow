@@ -20,7 +20,11 @@ COPY . .
 RUN npm run build
 
 # ---------- Étape 2 : servir le site avec Nginx -----------------------------
-FROM nginx:1.27-alpine
+FROM nginx:1.30-alpine
+
+# L'image officielle est reconstruite moins souvent que les paquets Alpine ne sont
+# corrigés : on applique les correctifs de sécurité publiés depuis (openssl, brotli...).
+RUN apk upgrade --no-cache
 
 # L'image Nginx remplace les variables ${...} des fichiers placés dans
 # /etc/nginx/templates/*.template et génère /etc/nginx/conf.d/default.conf.
