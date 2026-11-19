@@ -199,6 +199,8 @@ jobs:
     env:
       TAG: ${{ needs.prepare.outputs.tag }}
       FRONT_PORT: ${{ vars.FRONT_PORT || '8081' }}
+      TF_IN_AUTOMATION: "1"
+      TF_INPUT: "0"
     steps:
       - name: Récupérer le code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -206,34 +208,50 @@ jobs:
           persist-credentials: false
 
       # STAGING_DIR est une variable du processus du runner (son .env), pas du YAML
-      - name: Copier les fichiers dans STAGING_DIR
+      - name: Vérifier STAGING_DIR
         run: |
-          set -euo pipefail
           if [ -z "${STAGING_DIR:-}" ] || [ ! -f "$STAGING_DIR/.env" ]; then
             echo "::error title=Staging introuvable::STAGING_DIR absent ou sans .env (voir TP B.1)"
             exit 1
           fi
-          cp compose.staging.yaml deploy/deploy.sh deploy/smoke-test.sh deploy/backup.sh "$STAGING_DIR/"
 
-      # Runner persistant : les identifiants docker vont dans le dossier temporaire
-      # du job (vidé au job suivant) plutôt que dans le ~/.docker du runner
-      - name: Connexion à ghcr.io
-        env:
-          REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: tofu init (state dans STAGING_DIR)
+        working-directory: infra
+        run: tofu init -no-color -lockfile=readonly -backend-config="path=$STAGING_DIR/terraform.tfstate"
+
+      - name: Variables OpenTofu
+        working-directory: infra
+        run: ./ci-env.sh "$TAG"
+
+      # Ne fait quelque chose qu'au premier passage : supprime les conteneurs
+      # Compose (le volume reste) et importe le volume dans le state.
+      - name: Migration depuis Compose
+        working-directory: infra
         run: |
-          echo "DOCKER_CONFIG=$RUNNER_TEMP/docker" >> "$GITHUB_ENV"
-          echo "$REGISTRY_TOKEN" | DOCKER_CONFIG="$RUNNER_TEMP/docker" docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          if ! tofu state list | grep -qx 'docker_volume.pgdata'; then
+            docker rm -f taskflow-staging-db taskflow-staging-api taskflow-staging-front 2>/dev/null || true
+            docker network rm taskflow-staging 2>/dev/null || true
+            tofu import -no-color docker_volume.pgdata taskflow-staging-pgdata
+          else
+            echo "Volume déjà dans le state : rien à migrer"
+          fi
 
-      - name: Déployer ${{ env.TAG }}
-        run: cd "$STAGING_DIR" && COMPOSE_FILE=compose.staging.yaml ./deploy.sh "$TAG"
+      # On applique le plan affiché, pas un nouveau calcul. tfplan contient les
+      # valeurs sensibles en clair : supprimé dans tous les cas.
+      - name: tofu plan puis apply
+        working-directory: infra
+        env:
+          TF_VAR_ghcr_username: ${{ github.actor }}
+          TF_VAR_ghcr_token: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          trap 'rm -f tfplan' EXIT
+          tofu plan -no-color -lock-timeout=120s -out=tfplan
+          tofu apply -no-color -lock-timeout=120s tfplan
+          echo "$TAG" > "$STAGING_DIR/.deployed_tag"
 
       # Le runner est un conteneur : localhost serait lui-même, on vise le poste
       - name: Smoke test
         run: ./deploy/smoke-test.sh "http://host.docker.internal:$FRONT_PORT/health" "$TAG"
-
-      - name: Déconnexion de ghcr.io
-        if: always()
-        run: docker logout ghcr.io || true
 
   deploy-production:
     name: deploy-production
