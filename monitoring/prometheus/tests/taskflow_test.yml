@@ -1,0 +1,85 @@
+# Tests des règles avec promtool : on simule des séries et on vérifie quelles
+# alertes sont actives à un instant donné.
+#
+#   docker compose -f compose.monitoring.yaml exec prometheus \
+#     promtool test rules /etc/prometheus/tests/taskflow_test.yml
+#
+# Valeurs : "1x3" = 1 répété 4 fois ; "0+60x40" = 0, 60, 120... (un compteur).
+rule_files:
+  - ../rules/taskflow.yml
+
+evaluation_interval: 15s
+
+tests:
+  # Sonde OK pendant 1 minute, puis en échec à partir de 1m00.
+  - name: TaskFlowApiDown pending à 30 s d'échec, firing après 1 min 30
+    interval: 15s
+    input_series:
+      - series: 'probe_success{job="blackbox-health", env="prod", instance="http://front/health"}'
+        values: "1x3 0x12"
+    alert_rule_test:
+      - eval_time: 1m30s # échec depuis 30 s : encore pending (for: 1m), rien d'envoyé
+        alertname: TaskFlowApiDown
+        exp_alerts: []
+      - eval_time: 2m30s # échec depuis 1 min 30 : firing
+        alertname: TaskFlowApiDown
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              job: blackbox-health
+              env: prod
+              instance: http://front/health
+            exp_annotations:
+              summary: "TaskFlow injoignable (prod)"
+              description: "La sonde http://front/health échoue depuis plus d'une minute : l'application ne répond pas ou sa base est tombée."
+              runbook_url: "https://github.com/Ylian967/taskflow/blob/main/docs/INCIDENTS.md"
+
+  # Sonde toujours OK : aucune alerte.
+  - name: Pas d'alerte quand tout va bien
+    interval: 15s
+    input_series:
+      - series: 'probe_success{job="blackbox-health", env="prod", instance="http://front/health"}'
+        values: "1x20"
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: TaskFlowApiDown
+        exp_alerts: []
+
+  # 10 % de 5xx : le ratio enregistré vaut 0,1.
+  - name: Ratio d'erreurs 5xx calculé par la recording rule
+    interval: 15s
+    input_series:
+      - series: 'http_requests_total{job="taskflow-api", env="prod", method="GET", route="/api/tasks", status_code="200"}'
+        values: "0+90x40"
+      - series: 'http_requests_total{job="taskflow-api", env="prod", method="GET", route="/api/tasks", status_code="500"}'
+        values: "0+10x40"
+    promql_expr_test:
+      - expr: taskflow:http_errors:ratio5m
+        eval_time: 6m
+        exp_samples:
+          - labels: 'taskflow:http_errors:ratio5m{env="prod"}'
+            value: 0.1
+    alert_rule_test:
+      - eval_time: 9m # au-dessus de 5 % depuis plus de 5 min
+        alertname: TaskFlowHighErrorRate
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              env: prod
+            exp_annotations:
+              summary: "Plus de 5 % d'erreurs 5xx (prod)"
+              description: "10% des requêtes finissent en 5xx depuis 5 minutes."
+              runbook_url: "https://github.com/Ylian967/taskflow/blob/main/docs/INCIDENTS.md"
+
+  - name: Le Watchdog est toujours actif
+    interval: 15s
+    input_series: []
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: Watchdog
+        exp_alerts:
+          - exp_labels:
+              severity: none
+            exp_annotations:
+              summary: "Alerte de contrôle, toujours active"
+              description: "Prouve que Prometheus évalue les règles et joint Alertmanager. Routée vers un récepteur vide."
