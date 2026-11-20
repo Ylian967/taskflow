@@ -1,0 +1,73 @@
+groups:
+  # ---------- Recording rules : les calculs RED, faits une fois -------------
+  # Nom en niveau:métrique:opération. Le dashboard et les alertes lisent ces
+  # séries au lieu de recalculer la même requête partout.
+  - name: taskflow-red
+    rules:
+      - record: taskflow:http_requests:rate5m
+        expr: sum by (env, route) (rate(http_requests_total{job="taskflow-api"}[5m]))
+
+      - record: taskflow:http_errors:ratio5m
+        expr: |
+          sum by (env) (rate(http_requests_total{job="taskflow-api", status_code=~"5.."}[5m]))
+          /
+          sum by (env) (rate(http_requests_total{job="taskflow-api"}[5m]))
+
+      - record: taskflow:http_request_duration_seconds:p95_5m
+        expr: |
+          histogram_quantile(0.95,
+            sum by (env, le) (rate(http_request_duration_seconds_bucket{job="taskflow-api"}[5m])))
+
+  # ---------- Alertes ---------------------------------------------------------
+  - name: taskflow-alertes
+    rules:
+      # Le symptôme vu par l'utilisateur : /health ne répond pas "ok".
+      - alert: TaskFlowApiDown
+        expr: probe_success{job="blackbox-health"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "TaskFlow injoignable ({{ $labels.env }})"
+          description: "La sonde {{ $labels.instance }} échoue depuis plus d'une minute : l'application ne répond pas ou sa base est tombée."
+          runbook_url: "https://github.com/Ylian967/taskflow/blob/main/docs/INCIDENTS.md"
+
+      # Prometheus n'arrive plus à lire /metrics (conteneur arrêté, réseau...).
+      - alert: TaskFlowMetricsAbsent
+        expr: up{job="taskflow-api"} == 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Métriques de l'API absentes ({{ $labels.env }})"
+          description: "Prometheus ne collecte plus {{ $labels.instance }} depuis 2 minutes."
+          runbook_url: "https://github.com/Ylian967/taskflow/blob/main/docs/INCIDENTS.md"
+
+      - alert: TaskFlowHighErrorRate
+        expr: taskflow:http_errors:ratio5m > 0.05
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Plus de 5 % d'erreurs 5xx ({{ $labels.env }})"
+          description: "{{ $value | humanizePercentage }} des requêtes finissent en 5xx depuis 5 minutes."
+          runbook_url: "https://github.com/Ylian967/taskflow/blob/main/docs/INCIDENTS.md"
+
+      - alert: TaskFlowSlowResponses
+        expr: taskflow:http_request_duration_seconds:p95_5m > 0.5
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Latence p95 au-dessus de 500 ms ({{ $labels.env }})"
+          description: "95 % des requêtes prennent moins de {{ $value | humanizeDuration }}, au-delà de l'objectif de 500 ms."
+          runbook_url: "https://github.com/Ylian967/taskflow/blob/main/docs/INCIDENTS.md"
+
+      # Toujours active : si elle disparaît, c'est la chaîne d'alerte qui est cassée.
+      - alert: Watchdog
+        expr: vector(1)
+        labels:
+          severity: none
+        annotations:
+          summary: "Alerte de contrôle, toujours active"
+          description: "Prouve que Prometheus évalue les règles et joint Alertmanager. Routée vers un récepteur vide."
