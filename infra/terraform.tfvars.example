@@ -1,0 +1,5 @@
+# Copier en terraform.tfvars (ignoré par Git) pour travailler à la main.
+ghcr_owner = "ylian967"
+image_tag  = "latest"
+front_port = 8081
+# db_password : à passer par TF_VAR_db_password, jamais dans un fichier commité.
