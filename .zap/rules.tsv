@@ -1,0 +1,14 @@
+# .zap/rules.tsv : décision pour chaque règle de ZAP. Séparateur = TABULATION.
+# Format : ID<TAB>ACTION<TAB>justification. ACTION = IGNORE | INFO | WARN | FAIL.
+# Règle absente = WARN (n'échoue pas le job grâce à -I). Chaque IGNORE est justifié
+# dans docs/SECURITE.md, section « Registre des exceptions ».
+10038	FAIL	CSP absente : posée dans front/nginx.conf, une régression bloque la PR
+10055	WARN	CSP présente mais faible (joker, unsafe-inline) : à examiner sans bloquer
+10020	FAIL	Anti-clickjacking (X-Frame-Options, frame-ancestors) : corrigé, régression bloquante
+10021	FAIL	X-Content-Type-Options absent : corrigé, régression bloquante
+10063	FAIL	Permissions-Policy absent : corrigé, régression bloquante
+10036	FAIL	Version de Nginx dans l'en-tête Server : server_tokens off, régression bloquante
+10037	FAIL	X-Powered-By (Express) : retiré par proxy_hide_header, régression bloquante
+90004	WARN	Isolation entre origines (COOP, COEP, CORP) : en-têtes posés, surveillé sans bloquer
+10049	IGNORE	Storable and Cacheable Content : informatif, les assets Vite sont mis en cache 1 an exprès (nom avec hash)
+10109	IGNORE	Modern Web Application : informatif, signale seulement une application à une page
