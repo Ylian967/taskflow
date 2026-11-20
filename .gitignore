@@ -32,3 +32,6 @@ backups/
 *.tfplan
 tfplan
 terraform.tfvars
+
+# Rapports ZAP lancés à la main (étape 5.1)
+zap-local/
