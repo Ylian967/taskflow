@@ -24,3 +24,11 @@ backups/
 *.pem
 *.key
 *.crt
+
+# OpenTofu : le state contient des secrets, il vit hors du dépôt
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+tfplan
+terraform.tfvars
